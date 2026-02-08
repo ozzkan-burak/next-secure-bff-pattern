@@ -1,36 +1,48 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Next.js Secure BFF Pattern: The Fortress
 
-## Getting Started
+> **"Identity is the new perimeter."**
 
-First, run the development server:
+Bu proje, modern web uygulamalarında kimlik doğrulama (Authentication) süreçlerini **Client-Side** (Tarayıcı) üzerinden yönetmek yerine, Next.js'i bir **BFF (Backend for Frontend)** katmanı olarak kullanarak güvenli hale getiren bir referans mimarisidir.
 
-```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
-```
+Amaç: Hassas verileri (JWT Access Token) tarayıcının JavaScript erişimine tamamen kapatarak **XSS (Cross-Site Scripting)** saldırılarını etkisiz hale getirmektir.
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Problem: "LocalStorage" Yanılgısı
 
-## Learn More
+Geleneksel SPA (Single Page Application) mimarilerinde Access Token genellikle `localStorage` veya `sessionStorage` içinde saklanır.
 
-To learn more about Next.js, take a look at the following resources:
+* **Senaryo:** Sitenize zararlı bir 3. parti script (reklam, analitik vb.) sızarsa veya bir XSS açığı bulunursa; saldırgan tek bir satır kodla (`localStorage.getItem('token')`) kullanıcının oturumunu çalabilir.
+* **Risk:** Yüksek. Token çalındığında, saldırgan kullanıcı adına API'ye her türlü isteği atabilir.
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
+## 🛡️ Çözüm: "The Fortress" Mimarisi (HttpOnly Cookie Proxy)
 
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
+Bu mimaride Next.js, Frontend ile Backend API arasında bir **Güvenlik Duvarı (Proxy)** görevi görür.
 
-## Deploy on Vercel
+1.  **Backend (API):** Token üretir ve JSON olarak döner (Cookie bilmez).
+2.  **Next.js (BFF):** Token'ı API'den alır. Onu **`HttpOnly`**, **`Secure`** ve **`SameSite`** bayraklarına sahip bir Cookie içine paketler.
+3.  **Browser:** Cookie'yi saklar ama JavaScript ile **ASLA** okuyamaz (`document.cookie` boştur).
+4.  **Middleware:** Her istekte Cookie'yi kontrol eder, gerekirse token'ı ayrıştırıp (decode) kullanıcıyı yetkilendirir.
 
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
+### Mimari Akış Diyagramı
 
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```mermaid
+sequenceDiagram
+    participant User as Browser (JavaScript)
+    participant Next as Next.js (BFF / Proxy)
+    participant API as External Backend (.NET/Go/Node)
+
+    Note over User, Next: 1. GÜVENSİZ BÖLGE (Frontend)
+    User->>Next: POST /api/auth/login (Creds)
+    
+    Note over Next, API: 2. GÜVENLİ BÖLGE (Server-Side)
+    Next->>API: POST /external-api/login
+    API-->>Next: 200 OK + { accessToken: "eyJ..." }
+    
+    Note right of Next: 3. DÖNÜŞÜM (The Fortress Logic)
+    Next->>Next: Token -> HttpOnly Cookie Paketleme
+    
+    Next-->>User: 200 OK + Set-Cookie: auth_token=...; HttpOnly
+    
+    Note over User: 4. SONUÇ
+    Note right of User: JS token'ı göremez. <br/>XSS saldırıları token'ı çalamaz.
